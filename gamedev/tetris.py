@@ -61,6 +61,13 @@ POWER_HELP = {
 MAX_LEVEL = 20
 MESSAGE_TIME = 2.2
 
+FISH_SPECIES = [
+    {"name": "Goldfish",  "sprite_r": "><>", "sprite_l": "<><", "color": "warn",   "speed": 1.6},
+    {"name": "Clownfish", "sprite_r": ">o>", "sprite_l": "<o<", "color": "accent", "speed": 1.4},
+    {"name": "Guppy",     "sprite_r": ">*>", "sprite_l": "<*<", "color": "good",   "speed": 2.0},
+    {"name": "Jellyfish", "sprite_r": "(o)", "sprite_l": "(o)", "color": "hl",     "speed": 1.0},
+]
+
 SCORE_FILE = os.path.join(os.path.expanduser("~"), ".terminal_tetris.json")
 
 ORDER = "IOTSZJL"
@@ -145,11 +152,13 @@ class Piece(object):
 class Game(object):
     """All of the rules; knows nothing about the screen."""
 
-    def __init__(self, start_level=1, seed=None, undo_limit=3, powers=True):
+    def __init__(self, start_level=1, seed=None, undo_limit=3, powers=True,
+                 underwater=False):
         self.rng = random.Random(seed)
         self.start_level = max(1, min(MAX_LEVEL, start_level))
         self.undo_limit = max(0, undo_limit)
         self.power_limit = bool(powers)
+        self.underwater = bool(underwater)
         self.high = load_high_score()
         self.reset()
 
@@ -201,7 +210,64 @@ class Game(object):
         self.powers = []              # superpowers in hand, front one first
         self.slow_until = 0.0
         self.next_fall = now + gravity_for(self.level)
+        self.next_wave = now + self.rng.uniform(1.4, 2.8)
+        self.wave_dir = 0
+        self.next_fish = now + self.rng.uniform(5.0, 10.0)
+        self.fishes = []
+        self.game_over_reason = "topout"
+        self.last_update = now
         self.spawn()
+
+    def _spawn_fish(self, now):
+        valid_rows = []
+        for y in range(HIDDEN_ROWS, ROWS):
+            if self.board[y].count(None) >= 6:
+                valid_rows.append(y)
+        row = self.rng.choice(valid_rows) if valid_rows else (HIDDEN_ROWS + 8)
+        direction = self.rng.choice((-1, 1))
+        start_x = -2.0 if direction == 1 else float(COLS + 1)
+        species = self.rng.choice(FISH_SPECIES)
+        self.fishes.append({
+            "name": species["name"],
+            "x": start_x,
+            "y": row,
+            "dir": direction,
+            "speed": species["speed"],
+            "sprite_r": species["sprite_r"],
+            "sprite_l": species["sprite_l"],
+            "color": species["color"],
+            "announced": False,
+        })
+        self.next_fish = now + self.rng.uniform(5.0, 10.0)
+
+    def _check_fish_collision(self):
+        """Returns True if the active falling piece touches or crushes a fish."""
+        if not self.underwater or not self.fishes or not self.piece:
+            return False
+        piece_cells = set(self.piece.cells())
+        for fish in self.fishes:
+            fx = int(round(fish["x"]))
+            fy = fish["y"]
+            if 0 <= fx < COLS and 0 <= fy < ROWS and (fx, fy) in piece_cells:
+                return True
+        return False
+
+    def _update_fishes(self, now, dt):
+        if not self.underwater or self.state != "play":
+            return
+        if now >= self.next_fish:
+            self._spawn_fish(now)
+        for fish in list(self.fishes):
+            fish["x"] += fish["dir"] * fish["speed"] * dt
+            if 0 <= fish["x"] < COLS and not fish.get("announced"):
+                fish["announced"] = True
+                self.say("~ FISH SPOTTED! ~")
+            if fish["x"] < -3 or fish["x"] > COLS + 3:
+                self.fishes.remove(fish)
+        if self._check_fish_collision():
+            self.game_over_reason = "fish_crushed"
+            self.say("FISH HARMED!")
+            self.game_over()
 
     def _refill(self):
         while len(self.queue) < NEXT_COUNT + 1:
@@ -276,6 +342,12 @@ class Game(object):
             "pieces_placed": self.pieces_placed,
             "tally": dict(self.tally),
             "powers": list(self.powers),
+            "underwater": self.underwater,
+            "next_wave": self.next_wave,
+            "wave_dir": self.wave_dir,
+            "next_fish": self.next_fish,
+            "fishes": [dict(f) for f in self.fishes],
+            "game_over_reason": getattr(self, "game_over_reason", "topout"),
             "rng": self.rng.getstate(),
         }
 
@@ -292,6 +364,12 @@ class Game(object):
         self.pieces_placed = snap["pieces_placed"]
         self.tally = dict(snap["tally"])
         self.powers = list(snap.get("powers", []))
+        self.underwater = snap.get("underwater", self.underwater)
+        self.next_wave = snap.get("next_wave", time.monotonic() + 2.0)
+        self.wave_dir = snap.get("wave_dir", 0)
+        self.next_fish = snap.get("next_fish", time.monotonic() + 5.0)
+        self.fishes = [dict(f) for f in snap.get("fishes", [])]
+        self.game_over_reason = snap.get("game_over_reason", "topout")
         self.rng.setstate(snap["rng"])
         self.piece = Piece(snap["kind"]) if snap["kind"] else None
         self.state = "play"
@@ -317,7 +395,7 @@ class Game(object):
         """
         if self.undos_left <= 0 or self.state not in ("play", "flash", "over"):
             return False
-        if self.piece is None:
+        if self.piece is None or self.state == "over":
             if not self.history:
                 return False
         else:
@@ -344,6 +422,10 @@ class Game(object):
             self.history.append(self.snapshot())
             del self.history[:-UNDO_KEEP]
         if self.collides(self.piece.cells()):
+            self.game_over()
+        if self.underwater and self._check_fish_collision():
+            self.game_over_reason = "fish_crushed"
+            self.say("FISH HARMED!")
             self.game_over()
 
     def game_over(self):
@@ -384,6 +466,10 @@ class Game(object):
             self.lock_start = time.monotonic() if self.grounded() else None
         else:
             self._after_action(False)
+        if self.underwater and self._check_fish_collision():
+            self.game_over_reason = "fish_crushed"
+            self.say("FISH HARMED!")
+            self.game_over()
         return True
 
     def rotate(self, turns):
@@ -405,6 +491,10 @@ class Game(object):
                 p.y += ky
                 self.last_kick = i
                 self._after_action(True)
+                if self.underwater and self._check_fish_collision():
+                    self.game_over_reason = "fish_crushed"
+                    self.say("FISH HARMED!")
+                    self.game_over()
                 return True
         return False
 
@@ -419,8 +509,23 @@ class Game(object):
         if self.piece is None or self.state != "play":
             return
         dist = 0
-        while self.move(0, 1):
+        while True:
+            if not self.move(0, 1):
+                break
             dist += 1
+            if self.underwater:
+                if self.state == "over":
+                    return
+                # Hydrodynamic plunge wobble every 2 rows
+                if dist % 2 == 0 and self.rng.random() < 0.60:
+                    wobble_dir = self.wave_dir if self.wave_dir != 0 else self.rng.choice((-1, 1))
+                    if not self.collides(self.piece.cells(x=self.piece.x + wobble_dir, y=self.piece.y)):
+                        self.piece.x += wobble_dir
+                        if self._check_fish_collision():
+                            self.game_over_reason = "fish_crushed"
+                            self.say("FISH HARMED!")
+                            self.game_over()
+                            return
         self.score += 2 * dist
         if dist:
             self.last_was_rotation = False
@@ -528,6 +633,11 @@ class Game(object):
     def lock(self):
         p = self.piece
         if p is None:
+            return
+        if self.underwater and self._check_fish_collision():
+            self.game_over_reason = "fish_crushed"
+            self.say("FISH HARMED!")
+            self.game_over()
             return
         tspin, mini = self.detect_tspin()
         cells = p.cells()
@@ -639,6 +749,18 @@ class Game(object):
                 self.state = "play"
                 self.spawn()
             return
+        if self.state != "play":
+            return
+
+        if self.underwater:
+            dt = max(0.0, min(0.1, now - getattr(self, "last_update", now)))
+            self.last_update = now
+            self._update_fishes(now, dt)
+            if self.state == "play" and self.piece is not None and now >= self.next_wave:
+                self.wave_dir = self.rng.choice((-1, 1))
+                self.next_wave = now + max(1.2, 2.8 - (self.level - 1) * 0.08)
+                self.move(self.wave_dir, 0)
+
         if self.state != "play" or self.piece is None:
             return
 
@@ -676,6 +798,10 @@ class Game(object):
             if self.lock_start is not None:
                 self.lock_start += delta
             self.message_until += delta
+            if self.underwater:
+                self.next_wave += delta
+                self.next_fish += delta
+                self.last_update += delta
             for name in ("fx_lock_until", "fx_impact_until",
                          "fx_shake_until", "fx_level_until"):
                 setattr(self, name, getattr(self, name) + delta)
@@ -856,6 +982,8 @@ THEMES = {
     "gameboy":    {"I": 194, "O": 157, "T": 120, "S": 114, "Z": 71,  "J": 65,  "L": 151,
                    "accent": 157, "grid": 22,  "frame": 65,  "danger": 191},
     # the two below are deliberately hard: one hue, told apart by brightness
+    "aquatic":    {"I": 51,  "O": 221, "T": 177, "S": 42,  "Z": 203, "J": 32,  "L": 216,
+                   "accent": 51,  "grid": 23,  "frame": 30,  "danger": 196},
     "amber":      {"I": 220, "O": 214, "T": 208, "S": 215, "Z": 202, "J": 172, "L": 209,
                    "accent": 220, "grid": 94,  "frame": 136, "danger": 202},
     "matrix":     {"I": 46,  "O": 118, "T": 82,  "S": 40,  "Z": 34,  "J": 71,  "L": 154,
@@ -864,7 +992,7 @@ THEMES = {
                    "accent": 255, "grid": 237, "frame": 244, "danger": 250},
 }
 THEME_ORDER = ["classic", "neon", "dracula", "nord", "gruvbox", "candy",
-               "solarized", "accessible", "gameboy", "amber", "matrix", "mono"]
+               "solarized", "accessible", "gameboy", "aquatic", "amber", "matrix", "mono"]
 
 THEME_EVERY = 4          # the look changes this often, in levels
 # The single-hue themes are a deliberate handicap - fine to choose, unkind to
@@ -920,6 +1048,12 @@ def setup_colors(theme="classic"):
     PAIR["spark"] = curses.color_pair(12) | curses.A_BOLD
     curses.init_pair(13, spec["danger"], bg)
     PAIR["danger"] = curses.color_pair(13) | curses.A_BOLD
+    curses.init_pair(14, curses.COLOR_YELLOW, bg)
+    PAIR["warn"] = curses.color_pair(14) | curses.A_BOLD
+    curses.init_pair(15, curses.COLOR_GREEN, bg)
+    PAIR["good"] = curses.color_pair(15) | curses.A_BOLD
+    curses.init_pair(16, curses.COLOR_MAGENTA, bg)
+    PAIR["hl"] = curses.color_pair(16) | curses.A_BOLD
 
 
 def attr(name, fallback=0):
@@ -987,6 +1121,17 @@ class Screen(object):
     def field_cell(self, r, c, kind, mode="solid"):
         L = self.L
         self.block(1 + 1 + r * L.ch, L.pf_x + 1 + c * L.cw, kind, mode)
+
+    def fish_cell(self, r, c, sprite, color_name):
+        L = self.L
+        y = 1 + 1 + r * L.ch
+        x = L.pf_x + 1 + c * L.cw
+        text = sprite[:L.cw]
+        pad_left = max(0, (L.cw - len(text)) // 2)
+        line = " " * pad_left + text + " " * max(0, L.cw - len(text) - pad_left)
+        a = attr(color_name, curses.A_BOLD)
+        for i in range(L.ch):
+            self.put(y + i, x, line if i == 0 else " " * L.cw, a)
 
     def frame(self, y, x, w, h, title="", a=None):
         g = self.g
@@ -1083,6 +1228,15 @@ def draw(scr, game):
     locked = set(game.fx_lock_cells) if now < game.fx_lock_until else set()
     impact = set(game.fx_impact_cells) if now < game.fx_impact_until else set()
 
+    fish_cells = {}
+    if game.underwater and game.fishes:
+        for f in game.fishes:
+            fx = int(round(f["x"]))
+            fy = f["y"]
+            if 0 <= fx < COLS and HIDDEN_ROWS <= fy < ROWS:
+                sprite = f["sprite_r"] if f["dir"] > 0 else f["sprite_l"]
+                fish_cells[(fx, fy)] = (sprite, f["color"])
+
     for r in range(VISIBLE_ROWS):
         by = HIDDEN_ROWS + r
         for c in range(COLS):
@@ -1101,7 +1255,10 @@ def draw(scr, game):
                 scr.field_cell(r, c, None, "spark")      # what it landed on
                 continue
             k = game.board[by][c]
-            if k is not None:
+            if (c, by) in fish_cells and (c, by) not in live and (c, by) not in ghosted and k is None:
+                sprite, color = fish_cells[(c, by)]
+                scr.fish_cell(r, c, sprite, color)
+            elif k is not None:
                 scr.field_cell(r, c, k)
             elif (c, by) in live:
                 scr.field_cell(r, c, game.piece.kind)
@@ -1134,6 +1291,9 @@ def draw(scr, game):
         scr.put(y + 11, 0, "UNDO    %2d" % game.undos_left,
                 attr("accent", curses.A_BOLD) if game.undos_left
                 else attr("grid", curses.A_DIM))
+    if game.underwater:
+        cdir = "<<" if game.wave_dir < 0 else (">>" if game.wave_dir > 0 else " ~")
+        scr.put(y + 12, 0, "WAVE   %4s" % cdir, attr("accent", curses.A_BOLD))
     scr.put(y + 14, 0, "PIECES%4d" % game.pieces_placed, lab)
     scr.put(y + 15, 0, "TETRIS%4d" % game.tally["tetris"], lab)
     if game.message and now < game.message_until:
@@ -1174,7 +1334,10 @@ def draw(scr, game):
     if game.state == "paused":
         overlay(scr, ["", "P A U S E D", "", "p  resume", "r  restart", "q  quit", ""])
     elif game.state == "over":
-        lines = ["", "G A M E   O V E R", "",
+        lines = ["", "G A M E   O V E R", ""]
+        if getattr(game, "game_over_reason", "") == "fish_crushed":
+            lines += ["*  FISH HARMED!  *", "PROTECT THE REEF", ""]
+        lines += [
                  "SCORE   %s" % "{:,}".format(game.score),
                  "LINES   %d" % game.lines,
                  "LEVEL   %d" % game.level,
@@ -1242,8 +1405,9 @@ def draw_help(scr):
              % (POWER_EVERY, THEME_EVERY),
              "Hold a direction to slide the piece along.",
              "Line clears score 100/300/500/800 x level;",
-             "T-spins, back-to-back and combos score more."]
-    bw = min(L.w - 2, 52)
+             "T-spins, back-to-back and combos score more.",
+             "Underwater mode: waves sway pieces; protect the fish!"]
+    bw = min(L.w - 2, 54)
     bx = (L.w - bw) // 2
     scr.frame(2, bx, bw, len(keys) + len(notes) + 3)
     for i, (k, d) in enumerate(keys):
@@ -1409,7 +1573,8 @@ def run(stdscr, args):
                  show_ghost=not args.no_ghost, style=style)
     scr.allow_shake = not args.no_shake
     game = Game(start_level=args.level, seed=args.seed,
-                undo_limit=args.undo, powers=not args.no_powers)
+                undo_limit=args.undo, powers=not args.no_powers,
+                underwater=args.underwater)
     keys = KeyReader()
     repeat = AutoRepeat()
     helping = False
@@ -1579,6 +1744,8 @@ def build_parser():
                     help="plain ASCII blocks instead of Unicode")
     ap.add_argument("--no-ghost", action="store_true",
                     help="start with the ghost piece hidden")
+    ap.add_argument("--underwater", "-W", action="store_true",
+                    help="underwater mode: waves sway blocks, drop wobble, protect the fish")
     return ap
 
 
