@@ -245,8 +245,8 @@ class Game(object):
         self.next_fish = now + self.rng.uniform(5.0, 10.0)
 
     def _check_fish_collision(self):
-        """Returns True if the active falling piece touches or crushes a fish."""
-        if not self.underwater or not self.fishes or not self.piece:
+        """Returns True if the active falling piece touches or crushes a fish (unlocked at level >= 2)."""
+        if not self.underwater or self.level < 2 or not self.fishes or not self.piece:
             return False
         piece_cells = set(self.piece.cells())
         for fish in self.fishes:
@@ -257,7 +257,7 @@ class Game(object):
         return False
 
     def _update_fishes(self, now, dt):
-        if not self.underwater or self.state != "play":
+        if not self.underwater or self.state != "play" or self.level < 2:
             return
         if now >= self.next_fish:
             self._spawn_fish(now)
@@ -276,7 +276,7 @@ class Game(object):
     def _update_bubbles(self, now, dt):
         if not self.underwater or self.state != "play":
             return
-        is_upwelling = now < getattr(self, "upwelling_until", 0.0)
+        is_upwelling = (self.level >= 3) and (now < getattr(self, "upwelling_until", 0.0))
         # During upwelling, periodically spawn rising bubble stream particles
         if is_upwelling and self.rng.random() < 0.60:
             self.bubbles.append({
@@ -292,7 +292,7 @@ class Game(object):
 
     def _upwelling_physics_tumble(self):
         """Buoyant water current tilts and flips loose edge blocks and unsupported overhangs."""
-        if not self.underwater or self.state != "play":
+        if not self.underwater or self.state != "play" or self.level < 3:
             return
         
         loose_blocks = []
@@ -808,9 +808,16 @@ class Game(object):
                 self.sounds.append("level")
                 if self.power_limit and self.level % POWER_EVERY == 0:
                     self.grant_power()
+                if self.underwater:
+                    if self.level == 2:
+                        self.say("LEVEL 2: PROTECT THE FISH!")
+                        self.next_fish = time.monotonic() + self.rng.uniform(2.0, 4.0)
+                    elif self.level == 3:
+                        self.say("LEVEL 3: UPWELLING UNLEASHED!")
+                        self.next_upwelling = time.monotonic() + self.rng.uniform(4.0, 8.0)
         if tspin:
             self.tally["tspin"] += 1
-        if label:
+        if label and not (self.underwater and self.level > was and self.level in (2, 3)):
             extra = ""
             if self.combo > 0:
                 extra = "  COMBO x%d" % self.combo
@@ -839,7 +846,7 @@ class Game(object):
             self.last_update = now
             self._update_fishes(now, dt)
             self._update_bubbles(now, dt)
-            if self.state == "play":
+            if self.state == "play" and self.level >= 3:
                 if now >= self.next_upwelling and now >= self.upwelling_until:
                     self.upwelling_until = now + self.rng.uniform(6.0, 8.0)
                     self.next_upwelling = self.upwelling_until + self.rng.uniform(30.0, 45.0)
@@ -860,7 +867,7 @@ class Game(object):
             return
 
         interval = self.gravity()
-        is_upwelling = self.underwater and (now < getattr(self, "upwelling_until", 0.0))
+        is_upwelling = self.underwater and (self.level >= 3) and (now < getattr(self, "upwelling_until", 0.0))
         guard = 0
         if is_upwelling:
             float_interval = interval * 1.8
@@ -1536,7 +1543,7 @@ def draw_help(scr):
              "Hold a direction to slide the piece along.",
              "Line clears score 100/300/500/800 x level;",
              "T-spins, back-to-back and combos score more.",
-             "Underwater mode: waves sway blocks, upwelling lifts them; protect fish!"]
+             "Underwater mode: 3 tiers - L1 waves/wobble, L2 protect fish, L3 upwelling/tumble."]
     bw = min(L.w - 2, 54)
     bx = (L.w - bw) // 2
     scr.frame(2, bx, bw, len(keys) + len(notes) + 3)
@@ -1875,7 +1882,7 @@ def build_parser():
     ap.add_argument("--no-ghost", action="store_true",
                     help="start with the ghost piece hidden")
     ap.add_argument("--underwater", "-W", action="store_true",
-                    help="underwater mode: waves sway blocks, drop wobble, protect the fish")
+                    help="underwater mode: 3 tiers - waves & wobble (L1), fish (L2), upwelling & tumble (L3+)")
     return ap
 
 

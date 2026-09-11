@@ -103,13 +103,13 @@ g_chan.piece.x = 1; g_chan.piece.y = 20
 g_chan.hard_drop()
 check("hard drop falls cleanly to the floor in narrow channel", g_chan.board[39][3] is not None)
 
-print("\n[3] marine life & fish mechanics")
-g_fish = T.Game(seed=100, underwater=True)
+print("\n[3] marine life & fish mechanics (Level >= 2)")
+g_fish = T.Game(seed=100, underwater=True, start_level=2)
 blank(g_fish)
 check("fish list starts empty", len(g_fish.fishes) == 0)
 g_fish.next_fish = time.monotonic() - 1.0
 g_fish.update(time.monotonic())
-check("fish spawns on schedule", len(g_fish.fishes) == 1, g_fish.fishes)
+check("fish spawns on schedule at level 2", len(g_fish.fishes) == 1, g_fish.fishes)
 f = g_fish.fishes[0]
 check("fish has valid attributes", f["name"] in [s["name"] for s in T.FISH_SPECIES] and f["dir"] in (-1, 1))
 
@@ -118,9 +118,9 @@ f["x"] = 4.0; f["y"] = 25
 g_fish._update_fishes(time.monotonic(), 1.0)
 check("fish moves horizontally with dt", abs(f["x"] - (4.0 + f["dir"] * f["speed"] * 1.0)) < 1e-4)
 
-print("\n[4] protect the fish: instant game over on collision")
+print("\n[4] protect the fish: instant game over on collision (Level >= 2)")
 # 4a. Moving into fish
-g_hit1 = T.Game(seed=201, underwater=True)
+g_hit1 = T.Game(seed=201, underwater=True, start_level=2)
 blank(g_hit1)
 g_hit1.piece = T.Piece("O")
 g_hit1.piece.x = 2; g_hit1.piece.y = 25
@@ -132,7 +132,7 @@ check("game over triggered when piece touches fish", g_hit1.state == "over")
 check("game over reason is fish_crushed", g_hit1.game_over_reason == "fish_crushed")
 
 # 4b. Hard drop hitting fish in path
-g_hit2 = T.Game(seed=202, underwater=True)
+g_hit2 = T.Game(seed=202, underwater=True, start_level=2)
 blank(g_hit2)
 for y in range(20, 40):
     for c in range(T.COLS):
@@ -147,7 +147,7 @@ check("hard drop onto fish triggers instant game over", g_hit2.state == "over")
 check("cause is fish_crushed", g_hit2.game_over_reason == "fish_crushed")
 
 # 4c. Locking onto fish
-g_hit3 = T.Game(seed=203, underwater=True)
+g_hit3 = T.Game(seed=203, underwater=True, start_level=2)
 blank(g_hit3)
 g_hit3.piece = T.Piece("O")
 g_hit3.piece.x = 4; g_hit3.piece.y = 38
@@ -157,7 +157,7 @@ g_hit3.lock()
 check("locking block onto fish triggers game over", g_hit3.state == "over")
 
 print("\n[5] safe coexistence & normal play")
-g_safe = T.Game(seed=301, underwater=True)
+g_safe = T.Game(seed=301, underwater=True, start_level=2)
 blank(g_safe)
 fill(g_safe, 39, (9,))
 g_safe.piece = T.Piece("O")
@@ -171,7 +171,7 @@ check("normal line clear succeeds when fish is safely away", g_safe.lines == 1 a
 check("game continues in play state", g_safe.state in ("play", "flash"))
 
 # Fish swimming through already-present (static/locked) blocks on board must NOT harm fish
-g_static = T.Game(seed=302, underwater=True)
+g_static = T.Game(seed=302, underwater=True, start_level=2)
 blank(g_static)
 for c in range(T.COLS):
     g_static.board[35][c] = "I"  # locked row
@@ -185,7 +185,7 @@ check("no fish collision detected with static board blocks", not g_static._check
 
 print("\n[6] determinism and undo recovery")
 # Undo after hitting fish
-g_undo = T.Game(seed=401, underwater=True)
+g_undo = T.Game(seed=401, underwater=True, start_level=2)
 blank(g_undo)
 g_undo.piece = T.Piece("O")
 g_undo.piece.x = 2; g_undo.piece.y = 25
@@ -207,14 +207,14 @@ check("parser accepts --underwater flag", args.underwater is True)
 check("parser accepts aquatic theme", args.theme == "aquatic")
 check("aquatic theme is in THEMES dictionary", "aquatic" in T.THEMES)
 
-print("\n[8] upwelling thermal currents, bubble streams & physics tumble")
-g_up = T.Game(seed=501, underwater=True)
+print("\n[8] upwelling thermal currents, bubble streams & physics tumble (Level >= 3)")
+g_up = T.Game(seed=501, underwater=True, start_level=3)
 blank(g_up)
 check("upwelling timers initialized", g_up.next_upwelling > time.monotonic())
 now = time.monotonic()
 g_up.next_upwelling = now - 0.1
 g_up.update(now)
-check("upwelling triggers on schedule", g_up.upwelling_until > now)
+check("upwelling triggers on schedule at level 3", g_up.upwelling_until > now)
 
 # Reverse buoyancy: piece floats upwards gently during upwelling
 g_up.piece = T.Piece("O")
@@ -233,7 +233,7 @@ g_up._update_bubbles(now, 0.1)
 check("bubbles rise upwards over time", b["y"] < y_before, f"before={y_before}, after={b['y']}")
 
 # Physics-based tumble: loose overhang block tilts/flips into adjacent void
-g_tumble = T.Game(seed=502, underwater=True)
+g_tumble = T.Game(seed=502, underwater=True, start_level=3)
 blank(g_tumble)
 # Place a pillar with an unsupported loose overhang at (4, 35)
 g_tumble.board[36][3] = "I"
@@ -245,7 +245,7 @@ check("loose overhang block tumbled/flipped into lower space",
       g_tumble.board[35][4] is None or g_tumble.board[36][4] == "O" or g_tumble.board[36][5] == "O")
 
 # Undo restores upwelling state & bubbles
-g_undo_up = T.Game(seed=503, underwater=True)
+g_undo_up = T.Game(seed=503, underwater=True, start_level=3)
 blank(g_undo_up)
 g_undo_up.upwelling_until = now + 6.0
 g_undo_up.bubbles = [{"x": 3.0, "y": 30.0, "char": "o", "speed": 6.0}]
@@ -257,6 +257,63 @@ g_undo_up.bubbles = []
 g_undo_up.restore(snap)
 check("restore recovers upwelling timer and bubbles",
       g_undo_up.upwelling_until > now and len(g_undo_up.bubbles) == 1)
+
+print("\n[9] 3-tier cumulative level progression")
+# Level 1: waves & wobble active, NO fish spawn, NO upwelling
+g_l1 = T.Game(seed=601, underwater=True, start_level=1)
+blank(g_l1)
+g_l1.next_fish = now - 1.0
+g_l1.next_upwelling = now - 1.0
+g_l1.update(now)
+check("level 1: no fish spawn even after timer expires", len(g_l1.fishes) == 0)
+check("level 1: upwelling does not trigger", g_l1.upwelling_until <= now)
+# Place a fish artificially to verify level 1 is safe from fish collisions
+g_l1.fishes = [{"name": "Goldfish", "x": 4.0, "y": 25, "dir": 1, "speed": 1.0,
+                "sprite_r": "><>", "sprite_l": "<><", "color": "warn", "announced": True}]
+g_l1.piece = T.Piece("O")
+g_l1.piece.x = 4; g_l1.piece.y = 25
+check("level 1: piece over fish does not collide", not g_l1._check_fish_collision())
+g_l1.move(0, 0)
+check("level 1: game remains in play state despite touching fish", g_l1.state == "play")
+
+# Level transition: Level 1 -> Level 2
+g_trans = T.Game(seed=701, underwater=True, start_level=1)
+blank(g_trans)
+# Clearing 10 lines advances from Level 1 to Level 2
+g_trans.lines = 9
+for c in range(T.COLS):
+    g_trans.board[39][c] = "I"
+g_trans.flash_rows = [39]
+g_trans._score_clear(1, False, False, [39])
+check("reaching 10 lines advances level to 2", g_trans.level == 2)
+check("level 2 announcement displayed", "PROTECT THE FISH" in g_trans.message)
+
+# Level 2 has fish active, but NO upwelling
+g_l2 = T.Game(seed=602, underwater=True, start_level=2)
+blank(g_l2)
+g_l2.next_fish = now - 1.0
+g_l2.next_upwelling = now - 1.0
+g_l2.update(now)
+check("level 2: fish spawns on schedule", len(g_l2.fishes) == 1)
+check("level 2: upwelling still does not trigger", g_l2.upwelling_until <= now)
+
+# Level transition: Level 2 -> Level 3
+g_trans2 = T.Game(seed=702, underwater=True, start_level=1)
+blank(g_trans2)
+g_trans2.lines = 19
+for c in range(T.COLS):
+    g_trans2.board[39][c] = "I"
+g_trans2.flash_rows = [39]
+g_trans2._score_clear(1, False, False, [39])
+check("reaching 20 lines advances level to 3", g_trans2.level == 3)
+check("level 3 announcement displayed", "UPWELLING UNLEASHED" in g_trans2.message)
+
+# Level 3 has upwelling active
+g_l3 = T.Game(seed=603, underwater=True, start_level=3)
+blank(g_l3)
+g_l3.next_upwelling = now - 1.0
+g_l3.update(now)
+check("level 3: upwelling triggers on schedule", g_l3.upwelling_until > now)
 
 print("\n" + ("UNDERWATER OK" if not fails else ("%d UNDERWATER FAILS" % len(fails))))
 sys.exit(1 if fails else 0)
